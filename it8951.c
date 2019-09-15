@@ -295,12 +295,9 @@ out_free:
 	kfree(rxbuf);
 	kfree(txbuf);
 	return ret;
-
 }
 
 static void it8951_write_cmd_code(struct it8951_epd *epd, uint16_t cmd_code) {
-	// printk(KERN_INFO "it8951: WRITE CMD %x", cmd_code);
-
 	uint16_t spreamble = 0x6000;
 	uint16_t scmd_code = cmd_code;
 
@@ -324,7 +321,6 @@ static void it8951_write_data(struct it8951_epd *epd, uint16_t data) {
 
 static void it8951_write_n_data(struct it8951_epd *epd, uint8_t *data, uint32_t len)
 {
-#if 1
 	uint16_t *idata = (uint16_t *)data;
 	uint16_t *sdata = kmalloc(len, GFP_KERNEL);
 	int i;
@@ -335,12 +331,9 @@ static void it8951_write_n_data(struct it8951_epd *epd, uint8_t *data, uint32_t 
 	} else {
 		memcpy(sdata, idata, len);
 	}
-#endif
 	it8951_spi_transfer(epd, 0x0000, false, sdata, NULL, len);
 
-#if 1
 	kfree(sdata);
-#endif
 }
 
 static uint16_t it8951_read_data(struct it8951_epd *epd) {
@@ -365,43 +358,37 @@ static void it8951_read_n_data(struct it8951_epd *epd, uint8_t* buf, uint32_t le
 	it8951_spi_transfer(epd, spreamble, true, NULL, buf, len);
 }
 
-//-----------------------------------------------------------
-//Host Cmd 1 ¡V SYS_RUN
-//-----------------------------------------------------------
+/* Power management */
+
 void it8951_system_run(struct it8951_epd *epd)
 {
 	it8951_write_cmd_code(epd, IT8951_TCON_SYS_RUN);
 }
-//-----------------------------------------------------------
-//Host Cmd 2 - STANDBY
-//-----------------------------------------------------------
+
 void it8951_standby(struct it8951_epd *epd)
 {
 	it8951_write_cmd_code(epd, IT8951_TCON_STANDBY);
 }
-//-----------------------------------------------------------
-//Host Cmd 3 - SLEEP
-//-----------------------------------------------------------
+
 void it8951_sleep(struct it8951_epd *epd)
 {
 	it8951_write_cmd_code(epd, IT8951_TCON_SLEEP);
 }
 
+/* registers and commands */
+
 static uint16_t it8951_read_reg(struct it8951_epd *epd, uint16_t reg_addr)
 {
 	uint16_t data;
 
-	//Send Cmd and Register Address
 	it8951_write_cmd_code(epd, IT8951_TCON_REG_RD);
 	it8951_write_data(epd, reg_addr);
-	//Read data from Host Data bus
 	data = it8951_read_data(epd);
 	return data;
 }
 
 static void it8951_write_reg(struct it8951_epd *epd, uint16_t reg_addr, uint16_t value)
 {
-	//Send Cmd , Register Address and Write Value
 	it8951_write_cmd_code(epd, IT8951_TCON_REG_WR);
 	it8951_write_data(epd, reg_addr);
 	it8951_write_data(epd, value);
@@ -410,9 +397,7 @@ static void it8951_write_reg(struct it8951_epd *epd, uint16_t reg_addr, uint16_t
 static void it8951_send_cmd_arg(struct it8951_epd *epd, uint16_t cmd_code, uint16_t* arg, uint16_t num_arg)
 {
 	uint16_t i;
-	//Send Cmd code
 	it8951_write_cmd_code(epd, cmd_code);
-	//Send Data
 	for (i = 0; i < num_arg; i++)
 	{
 		it8951_write_data(epd, arg[i]);
@@ -422,7 +407,6 @@ static void it8951_send_cmd_arg(struct it8951_epd *epd, uint16_t cmd_code, uint1
 static void it8951_load_img_area_start(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info, struct it8951_area_img_info* area_img_info)
 {
 	uint16_t arg[5];
-	//Setting Argument for Load image start
 	arg[0] = (load_img_info->endian_type << 8 )
 	         | (load_img_info->pixel_format << 4)
 	         | (load_img_info->rotate);
@@ -430,7 +414,6 @@ static void it8951_load_img_area_start(struct it8951_epd *epd, struct it8951_loa
 	arg[2] = area_img_info->y;
 	arg[3] = area_img_info->width;
 	arg[4] = area_img_info->height;
-	//Send Cmd and Args
 	it8951_send_cmd_arg(epd, IT8951_TCON_LD_IMG_AREA, arg, 5);
 }
 
@@ -439,61 +422,42 @@ static void it8951_load_img_end(struct it8951_epd *epd)
 	it8951_write_cmd_code(epd, IT8951_TCON_LD_IMG_END);
 }
 
-//-----------------------------------------------------------
-//Initial function - 1
-//-----------------------------------------------------------
 static void it8951_get_system_info(struct it8951_epd *epd)
 {
 	struct it8951_dev_info* dev_info = &epd->dev_info;
 
 	memset(dev_info, 0, sizeof(struct it8951_dev_info));
 
-	//Send I80 CMD
 	it8951_write_cmd_code(epd, USDEF_I80_CMD_GET_DEV_INFO);
 
-	//Burst Read Request for SPI interface only
-	it8951_read_n_data(epd, (uint8_t *)dev_info, sizeof(struct it8951_dev_info));//Polling HRDY for each words(2-bytes) if possible
+	it8951_read_n_data(epd, (uint8_t *)dev_info, sizeof(struct it8951_dev_info));
 
-	//Show Device information of IT8951
 	printk(KERN_INFO "it8951: Panel(W,H) = (%d,%d)\n",
 	       dev_info->panel_w, dev_info->panel_h );
 	printk(KERN_INFO "it8951: Image Buffer Address = %X\n",
 	       dev_info->img_buf_addr_l | (dev_info->img_buf_addr_h << 16));
-	//Show Firmware and LUT Version
 	printk(KERN_INFO "it8951: FW Version = %s\n", (uint8_t*)dev_info->fw_version);
 	printk(KERN_INFO "it8951: LUT Version = %s\n", (uint8_t*)dev_info->lut_version);
 }
 
-//-----------------------------------------------------------
-//Initial function 2 ¡V Set Image buffer base address
-//-----------------------------------------------------------
 static void it8951_set_img_buf_base_addr(struct it8951_epd *epd, uint32_t base_addr)
 {
 	uint16_t h = (uint16_t)((base_addr >> 16) & 0x0000FFFF);
 	uint16_t l = (uint16_t)( base_addr & 0x0000FFFF);
-	//Write LISAR Reg
 	it8951_write_reg(epd, LISAR + 2, h);
 	it8951_write_reg(epd, LISAR, l);
 }
 
-//-----------------------------------------------------------
-//Display function 1 - Wait for LUT Engine Finish
-//                     Polling Display Engine Ready by LUTNo
-//-----------------------------------------------------------
 static void it8951_wait_for_display_ready(struct it8951_epd *epd)
 {
 	//Check IT8951 Register LUTAFSR => NonZero Busy, 0 - Free
 	while (it8951_read_reg(epd, LUTAFSR));
 }
 
-//-----------------------------------------------------------
-//Display function 2---Load Image Area process
-//-----------------------------------------------------------
 static void it8951_host_area_packed_pixel_write(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info, struct it8951_area_img_info* area_img_info)
 {
-	uint32_t i = 0, j = 0;
+	uint32_t j = 0;
 	//Source buffer address of Host
-//	uint16_t* frame_buf = (uint16_t*)load_img_info->start_fb_addr;
 	uint8_t* frame_buf = (uint8_t*)load_img_info->start_fb_addr;
 
 	//Set Image buffer(IT8951) Base address
@@ -501,23 +465,10 @@ static void it8951_host_area_packed_pixel_write(struct it8951_epd *epd, struct i
 	//Send Load Image start Cmd
 	it8951_load_img_area_start(epd, load_img_info, area_img_info);
 	//Host Write Data
-
 	for (j = 0; j < area_img_info->height; j++)
 	{
-#if 1
 		it8951_write_n_data(epd, frame_buf, area_img_info->width);
 		frame_buf += area_img_info->width;
-#endif
-
-#if 0
-		for (i = 0; i < area_img_info->width / 2; i++)
-		{
-			//Write a Word(2-Bytes) for each time
-			it8951_write_data(epd, *frame_buf);
-			frame_buf++;
-		}
-#endif
-
 	}
 
 #if 0
@@ -528,14 +479,9 @@ static void it8951_host_area_packed_pixel_write(struct it8951_epd *epd, struct i
 	it8951_load_img_end(epd);
 }
 
-//-----------------------------------------------------------
-//Display functions 3---Application for Display panel Area
-//-----------------------------------------------------------
 static void it8951_display_area(struct it8951_epd *epd, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t dpy_mode)
 {
-	//Send I80 Display Command (User defined command of IT8951)
 	it8951_write_cmd_code(epd, USDEF_I80_CMD_DPY_AREA); //0x0034
-	//Write arguments
 	it8951_write_data(epd, x);
 	it8951_write_data(epd, y);
 	it8951_write_data(epd, w);
@@ -636,17 +582,9 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	full = tinydrm_merge_clips(&clip, clips, num_clips, flags,
 	                           fb->width, fb->height);
 
-	// TODO
-	/*
-	clip.x1 = 0;
-	clip.x2 = fb->width;
-	clip.y1 = 0;
-	clip.y2 = fb->height;
-	*/
 	if (!epd->enabled)
 		return 0;
 
-//	buf = kmalloc(epd->dev_info.panel_w * epd->dev_info.panel_h, GFP_KERNEL);
 	buf = kmalloc_array(fb->width, fb->height, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
@@ -703,7 +641,6 @@ static const struct drm_framebuffer_funcs it8951_fb_funcs = {
 	.destroy	= drm_gem_fb_destroy,
 	.create_handle	= drm_gem_fb_create_handle,
 	.dirty = tinydrm_fb_dirty,
-//	.dirty		= it8951_fb_dirty,
 };
 
 static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
@@ -746,7 +683,6 @@ static const struct drm_simple_display_pipe_funcs it8951_pipe_funcs = {
 	.disable = it8951_pipe_disable,
 	.update = tinydrm_display_pipe_update,
 	.prepare_fb = drm_gem_fb_simple_display_pipe_prepare_fb,
-//	.prepare_fb = tinydrm_display_pipe_prepare_fb,
 };
 
 static const uint32_t it8951_formats[] = {
@@ -878,8 +814,6 @@ static void it8951_shutdown(struct spi_device *spi)
 	struct tinydrm_device *tdev = &epd->tinydrm;
 
 	tinydrm_shutdown(tdev);
-
-	//it8951_shutdown(epd);
 
 	printk(KERN_INFO "it8951: shutted down\n");
 }
