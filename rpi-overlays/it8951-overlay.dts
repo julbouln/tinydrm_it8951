@@ -1,0 +1,63 @@
+/*
+ * Device Tree overlay for it8951
+ *
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835", "brcm,bcm2708", "brcm,bcm2709";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			status = "okay";
+
+			spidev@0{
+				status = "disabled";
+			};
+
+			spidev@1{
+				status = "disabled";
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&gpio>;
+		__overlay__ {
+			it8951_pins: it8951_pins {
+				brcm,pins = <17 24>;
+				brcm,function = <1 0>; /* out in */
+			};
+		};
+	};
+
+	fragment@2 {
+		target = <&spi0>;
+		__overlay__ {
+			/* needed to avoid dtc warning */
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			it8951: it8951@0{
+				compatible = "ite,it8951";
+				pinctrl-names = "default";
+				pinctrl-0 = <&it8951_pins>;
+
+				reg = <0>;
+				spi-max-frequency = <24000000>;
+
+				rotation = <0>;
+				reset-gpios = <&gpio 17 0>;
+				hrdy-gpios = <&gpio 24 0>;
+			};
+		};
+	};
+
+	__overrides__ {
+		speed =		<&it8951>,"spi-max-frequency:0";
+		rotation =	<&it8951>,"rotation:0";
+	};
+};
