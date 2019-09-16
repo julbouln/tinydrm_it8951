@@ -157,23 +157,41 @@ static void it8951_wait_for_ready(struct it8951_epd *epd)
 
 /* SPI data transfer */
 
-#define MAX_DMA_TRANSFER 32768
+static inline void it8951_memcpy_swab16(struct it8951_epd *epd, u16 *dst, u16 *src, size_t len)
+{
+	if (epd->little_endian) {
+		int i;
+		for (i = 0; i < len; i++) {
+			*dst++ = swab16(*src++);
+		}
+	} else {
+		memcpy(dst, src, len);
+	}
+}
+
+static inline u16 it8951_swab16(struct it8951_epd *epd, u16 data) {
+	if (epd->little_endian) {
+		return swab16(data);
+	} else {
+		return data;
+	}
+}
 
 static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool dummy, const void *tx, void *rx, uint32_t len) {
 	int udelay = 0;
 	int speed_hz = 12000000; // can't get it works at > 12Mhz
 	int ret;
 	u8 *txbuf = NULL, *rxbuf = NULL;
-	int i;
 
-	/* Stack allocated tx? */
-	if (tx && len <= 32) {
+	uint16_t spreamble = it8951_swab16(epd, preamble);
+
+	if (tx) {
 		txbuf = kmalloc(len, GFP_KERNEL);
 		if (!txbuf) {
 			ret = -ENOMEM;
 			goto out_free;
 		}
-		memcpy(txbuf, tx, len);
+		it8951_memcpy_swab16(epd, (uint16_t *)txbuf, (uint16_t *)tx, len / 2);
 	}
 
 	if (rx) {
@@ -190,7 +208,7 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 		uint16_t dummy = 0;
 		struct spi_transfer tr[3] = {};
 
-		tr[0].tx_buf = &preamble;
+		tr[0].tx_buf = &spreamble;
 		tr[0].len = 2;
 		tr[0].delay_usecs = udelay;
 		tr[0].speed_hz = speed_hz;
@@ -200,7 +218,7 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 		tr[1].delay_usecs = udelay;
 		tr[1].speed_hz = speed_hz;
 
-		tr[2].tx_buf = txbuf ? txbuf : tx;
+		tr[2].tx_buf = txbuf;
 		tr[2].rx_buf = rxbuf;
 		tr[2].len = len;
 		tr[2].delay_usecs = udelay;
@@ -208,87 +226,26 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 
 		ret = spi_sync_transfer(epd->spi, tr, 3);
 		if (rx && !ret) {
-			if (epd->little_endian) {
-				uint16_t * wrxbuf = (uint16_t *)rxbuf;
-				uint16_t * wrx = (uint16_t *)rx;
-				for (i = 0; i < len / 2; i++) {
-					uint16_t sdata = wrxbuf[i];
-					wrx[i] = swab16(sdata);
-				}
-			} else {
-				memcpy(rx, rxbuf, len);
-			}
+			it8951_memcpy_swab16(epd, (uint16_t *)rx, (uint16_t *)rxbuf, len / 2);
 		}
 	} else {
-		if (len > MAX_DMA_TRANSFER) {
-			int ctr;
-			uint32_t tr_count = len / MAX_DMA_TRANSFER + 2;
-			struct spi_transfer *tr = kmalloc(sizeof(struct spi_transfer) * tr_count, GFP_KERNEL);
+		struct spi_transfer tr[2] = {};
 
-			tr[0].tx_buf = &preamble;
-			tr[0].len = 2;
-			tr[0].delay_usecs = udelay;
-			tr[0].speed_hz = speed_hz;
+		tr[0].tx_buf = &spreamble;
+		tr[0].len = 2;
+		tr[0].delay_usecs = udelay;
+		tr[0].speed_hz = speed_hz;
 
-			for (ctr = 1; ctr < tr_count; ctr++) {
-				uint32_t pos = (ctr - 1) * MAX_DMA_TRANSFER;
-				tr[ctr].tx_buf = txbuf + pos;
-				tr[ctr].rx_buf = rxbuf;
-				tr[ctr].len = MAX_DMA_TRANSFER;
-				if (ctr == tr_count - 1) {
-					tr[ctr].len = len - pos;
-				}
-				tr[ctr].delay_usecs = udelay;
-				tr[ctr].speed_hz = speed_hz;
-				printk(KERN_INFO "TRANSFER %d %d", ctr, tr[ctr].len);
-			}
-			ret = spi_sync_transfer(epd->spi, tr, tr_count);
-			if (rx && !ret) {
-				if (epd->little_endian) {
+		tr[1].tx_buf = txbuf;
+		tr[1].rx_buf = rxbuf;
+		tr[1].len = len;
+		tr[1].delay_usecs = udelay;
+		tr[1].speed_hz = speed_hz;
 
-					uint16_t * wrxbuf = (uint16_t *)rxbuf;
-					uint16_t * wrx = (uint16_t *)rx;
-					for (i = 0; i < len / 2; i++) {
-						uint16_t sdata = wrxbuf[i];
-						wrx[i] = swab16(sdata);
-					}
-				} else {
-					memcpy(rx, rxbuf, len);
-				}
-			}
-			kfree(tr);
-		} else {
-
-			struct spi_transfer tr[2] = {};
-
-			tr[0].tx_buf = &preamble;
-			tr[0].len = 2;
-			tr[0].delay_usecs = udelay;
-			tr[0].speed_hz = speed_hz;
-
-			tr[1].tx_buf = txbuf ? txbuf : tx;
-			tr[1].rx_buf = rxbuf;
-			tr[1].len = len;
-			tr[1].delay_usecs = udelay;
-			tr[1].speed_hz = speed_hz;
-
-			ret = spi_sync_transfer(epd->spi, tr, 2);
-			if (rx && !ret) {
-				if (epd->little_endian) {
-
-					uint16_t * wrxbuf = (uint16_t *)rxbuf;
-					uint16_t * wrx = (uint16_t *)rx;
-					for (i = 0; i < len / 2; i++) {
-						uint16_t sdata = wrxbuf[i];
-						wrx[i] = swab16(sdata);
-					}
-				} else {
-
-					memcpy(rx, rxbuf, len);
-				}
-			}
+		ret = spi_sync_transfer(epd->spi, tr, 2);
+		if (rx && !ret) {
+			it8951_memcpy_swab16(epd, (uint16_t *)rx, (uint16_t *)rxbuf, len / 2);
 		}
-
 	}
 
 out_free:
@@ -298,64 +255,26 @@ out_free:
 }
 
 static void it8951_write_cmd_code(struct it8951_epd *epd, uint16_t cmd_code) {
-	uint16_t spreamble = 0x6000;
-	uint16_t scmd_code = cmd_code;
-
-	if (epd->little_endian) {
-		spreamble = swab16(spreamble);
-		scmd_code = swab16(scmd_code);
-	}
-
-	it8951_spi_transfer(epd, spreamble, false, &scmd_code, NULL, 2);
+	it8951_spi_transfer(epd, 0x6000, false, &cmd_code, NULL, 2);
 }
 
 static void it8951_write_data(struct it8951_epd *epd, uint16_t data) {
-	uint16_t sdata = data;
-
-	if (epd->little_endian) {
-		sdata = swab16(sdata);
-	}
-
-	it8951_spi_transfer(epd, 0x0000, false, &sdata, NULL, 2);
+	it8951_spi_transfer(epd, 0x0000, false, &data, NULL, 2);
 }
 
 static void it8951_write_n_data(struct it8951_epd *epd, uint8_t *data, uint32_t len)
 {
-	uint16_t *idata = (uint16_t *)data;
-	uint16_t *sdata = kmalloc(len, GFP_KERNEL);
-	int i;
-	if (epd->little_endian) {
-		for (i = 0; i < len / 2; i++) {
-			sdata[i] = swab16(idata[i]);
-		}
-	} else {
-		memcpy(sdata, idata, len);
-	}
-	it8951_spi_transfer(epd, 0x0000, false, sdata, NULL, len);
-
-	kfree(sdata);
+	it8951_spi_transfer(epd, 0x0000, false, data, NULL, len);
 }
 
 static uint16_t it8951_read_data(struct it8951_epd *epd) {
-	uint16_t spreamble = 0x1000;
 	uint16_t data = 0;
-
-	if (epd->little_endian) {
-		spreamble = swab16(spreamble);
-	}
-
-	it8951_spi_transfer(epd, spreamble, true, NULL, &data, 2);
-	return swab16(data);
+	it8951_spi_transfer(epd, 0x1000, true, NULL, &data, 2);
+	return data;
 }
 
 static void it8951_read_n_data(struct it8951_epd *epd, uint8_t* buf, uint32_t len) {
-	uint16_t spreamble = 0x1000;
-
-	if (epd->little_endian) {
-		spreamble = swab16(spreamble);
-	}
-
-	it8951_spi_transfer(epd, spreamble, true, NULL, buf, len);
+	it8951_spi_transfer(epd, 0x1000, true, NULL, buf, len);
 }
 
 /* Power management */
@@ -799,9 +718,6 @@ static int it8951_probe(struct spi_device *spi)
 
 static int it8951_remove(struct spi_device *spi)
 {
-	struct it8951_epd *epd = spi_get_drvdata(spi);
-	struct tinydrm_device *tdev = &epd->tinydrm;
-
 	device_remove_file(&spi->dev, &it8951_update_mode_attr);
 
 	printk(KERN_INFO "it8951: removed\n");
