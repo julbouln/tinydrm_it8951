@@ -27,9 +27,11 @@
 
 //I80 User defined command code
 #define USDEF_I80_CMD_DPY_AREA     0x0034
-#define USDEF_I80_CMD_GET_DEV_INFO 0x0302
 #define USDEF_I80_CMD_DPY_BUF_AREA 0x0037
+#define USDEF_I80_CMD_PWR_SEQ 	   0x0038
 #define USDEF_I80_CMD_VCOM		   0x0039
+
+#define USDEF_I80_CMD_GET_DEV_INFO 0x0302
 
 //Rotate mode
 #define IT8951_ROTATE_0     0
@@ -89,6 +91,7 @@
 #define LUTAFSR   (DISPLAY_REG_BASE + 0x224)  //LUT Status Reg (status of All LUT Engines)
 
 #define BGVR      (DISPLAY_REG_BASE + 0x250)  //Bitmap (1bpp) image color table
+
 //-------System Registers----------------
 #define SYS_REG_BASE 0x0000
 
@@ -139,6 +142,8 @@ struct it8951_epd {
 
 	uint32_t img_buf_addr;
 
+	uint64_t counter;
+
 	int update_mode;
 
 	bool little_endian;
@@ -178,7 +183,6 @@ static inline u16 it8951_swab16(struct it8951_epd *epd, u16 data) {
 }
 
 static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool dummy, const void *tx, void *rx, uint32_t len) {
-	int udelay = 0;
 	int speed_hz = 12000000; // can't get it works at > 12Mhz
 	int ret;
 	u8 *txbuf = NULL, *rxbuf = NULL;
@@ -210,42 +214,35 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 
 		tr[0].tx_buf = &spreamble;
 		tr[0].len = 2;
-		tr[0].delay_usecs = udelay;
 		tr[0].speed_hz = speed_hz;
 
 		tr[1].rx_buf = &dummy;
 		tr[1].len = 2;
-		tr[1].delay_usecs = udelay;
 		tr[1].speed_hz = speed_hz;
 
 		tr[2].tx_buf = txbuf;
 		tr[2].rx_buf = rxbuf;
 		tr[2].len = len;
-		tr[2].delay_usecs = udelay;
 		tr[2].speed_hz = speed_hz;
 
 		ret = spi_sync_transfer(epd->spi, tr, 3);
-		if (rx && !ret) {
-			it8951_memcpy_swab16(epd, (uint16_t *)rx, (uint16_t *)rxbuf, len / 2);
-		}
 	} else {
 		struct spi_transfer tr[2] = {};
 
 		tr[0].tx_buf = &spreamble;
 		tr[0].len = 2;
-		tr[0].delay_usecs = udelay;
 		tr[0].speed_hz = speed_hz;
 
 		tr[1].tx_buf = txbuf;
 		tr[1].rx_buf = rxbuf;
 		tr[1].len = len;
-		tr[1].delay_usecs = udelay;
 		tr[1].speed_hz = speed_hz;
 
 		ret = spi_sync_transfer(epd->spi, tr, 2);
-		if (rx && !ret) {
-			it8951_memcpy_swab16(epd, (uint16_t *)rx, (uint16_t *)rxbuf, len / 2);
-		}
+	}
+
+	if (rx && !ret) {
+		it8951_memcpy_swab16(epd, (uint16_t *)rx, (uint16_t *)rxbuf, len / 2);
 	}
 
 out_free:
@@ -323,6 +320,16 @@ static void it8951_send_cmd_arg(struct it8951_epd *epd, uint16_t cmd_code, uint1
 	}
 }
 
+static void it8951_load_img_start(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info)
+{
+	uint16_t arg;
+	arg = (load_img_info->endian_type << 8 )
+	      | (load_img_info->pixel_format << 4)
+	      | (load_img_info->rotate);
+	it8951_write_cmd_code(epd, IT8951_TCON_LD_IMG);
+	it8951_write_data(epd, arg);
+}
+
 static void it8951_load_img_area_start(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info, struct it8951_area_img_info* area_img_info)
 {
 	uint16_t arg[5];
@@ -371,9 +378,31 @@ static void it8951_wait_for_display_ready(struct it8951_epd *epd)
 {
 	//Check IT8951 Register LUTAFSR => NonZero Busy, 0 - Free
 	while (it8951_read_reg(epd, LUTAFSR));
+
 }
 
-static void it8951_host_area_packed_pixel_write(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info, struct it8951_area_img_info* area_img_info)
+static void it8951_packed_pixel_write(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info)
+{
+	uint32_t j = 0;
+	//Source buffer address of Host
+	uint8_t* frame_buf = (uint8_t*)load_img_info->start_fb_addr;
+
+	//Set Image buffer(IT8951) Base address
+	it8951_set_img_buf_base_addr(epd, load_img_info->img_buf_base_addr);
+	//Send Load Image start Cmd
+	it8951_load_img_start(epd, load_img_info);
+	//Host Write Data
+	for (j = 0; j < epd->dev_info.panel_h; j++)
+	{
+		it8951_write_n_data(epd, frame_buf, epd->dev_info.panel_w);
+		frame_buf += epd->dev_info.panel_w;
+	}
+
+	//Send Load Img End Command
+	it8951_load_img_end(epd);
+}
+
+static void it8951_packed_pixel_write_area(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info, struct it8951_area_img_info* area_img_info)
 {
 	uint32_t j = 0;
 	//Source buffer address of Host
@@ -400,7 +429,7 @@ static void it8951_host_area_packed_pixel_write(struct it8951_epd *epd, struct i
 
 static void it8951_display_area(struct it8951_epd *epd, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t dpy_mode)
 {
-	it8951_write_cmd_code(epd, USDEF_I80_CMD_DPY_AREA); //0x0034
+	it8951_write_cmd_code(epd, USDEF_I80_CMD_DPY_AREA);
 	it8951_write_data(epd, x);
 	it8951_write_data(epd, y);
 	it8951_write_data(epd, w);
@@ -408,7 +437,17 @@ static void it8951_display_area(struct it8951_epd *epd, uint16_t x, uint16_t y, 
 	it8951_write_data(epd, dpy_mode);
 }
 
-#if 0
+#if 1
+
+static inline uint8_t _it8951_rgb_to_4bits(uint32_t rgb) {
+	u8 r = (rgb & 0x00ff0000) >> 16;
+	u8 g = (rgb & 0x0000ff00) >> 8;
+	u8 b =  rgb & 0x000000ff;
+
+	/* ITU BT.601: Y = 0.299 R + 0.587 G + 0.114 B */
+	return ((3 * r + 6 * g + b) / 10) >> 4;
+}
+
 static void it8951_xrgb8888_to_gray4(u8 *dst, void *vaddr, struct drm_framebuffer *fb,
                                      struct drm_clip_rect *clip)
 {
@@ -432,14 +471,9 @@ static void it8951_xrgb8888_to_gray4(u8 *dst, void *vaddr, struct drm_framebuffe
 		src += clip->x1;
 		memcpy(buf, src, len);
 		src = buf;
-		for (x = clip->x1; x < clip->x2; x++) {
-			u8 r = (*src & 0x00ff0000) >> 16;
-			u8 g = (*src & 0x0000ff00) >> 8;
-			u8 b =  *src & 0x000000ff;
-
-			/* ITU BT.601: Y = 0.299 R + 0.587 G + 0.114 B */
-			*dst++ = ((3 * r + 6 * g + b) / 10) / 16;
-			src++;
+		for (x = clip->x1; x < clip->x2; x += 2) {
+			*dst++ = _it8951_rgb_to_4bits(*src) + (_it8951_rgb_to_4bits(*(src + 1)) << 4);
+			src += 2;
 		}
 	}
 
@@ -496,15 +530,30 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	int ret;
 
 	struct it8951_load_img_info load_img_info;
-	struct it8951_area_img_info area_img_info;
-
-	full = tinydrm_merge_clips(&clip, clips, num_clips, flags,
-	                           fb->width, fb->height);
 
 	if (!epd->enabled)
 		return 0;
 
-	buf = kmalloc_array(fb->width, fb->height, GFP_KERNEL);
+	full = tinydrm_merge_clips(&clip, clips, num_clips, flags,
+	                           fb->width, fb->height);
+
+	// 4 bytes padding
+	if (clip.x1 % 4 != 0)
+		clip.x1 -= clip.x1 % 4;
+
+	if (clip.y1 % 4 != 0)
+		clip.y1 -= clip.y1 % 4;
+
+	if (clip.x2 % 4 != 0)
+		clip.x2 += clip.x2 % 4;
+
+	if (clip.y2 % 4 != 0)
+		clip.y2 += clip.y2 % 4;
+
+	//printk(KERN_INFO "it8951: dirty flags:%d color:%d clips:%d, full:%d, x1:%d, y1:%d, x2:%d, y2:%d\n",
+	//       flags, color, num_clips, full, clip.x1, clip.y1, clip.x2, clip.y2);
+
+	buf = kmalloc((clip.x2 - clip.x1)*(clip.y2 - clip.y1)/2, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -515,7 +564,7 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 			goto out_free;
 	}
 
-	tinydrm_xrgb8888_to_gray8(buf, cma_obj->vaddr, fb, &clip);
+	it8951_xrgb8888_to_gray4(buf, cma_obj->vaddr, fb, &clip);
 
 	if (import_attach) {
 		ret = dma_buf_end_cpu_access(import_attach->dmabuf,
@@ -531,19 +580,26 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 
 	load_img_info.start_fb_addr    = (uint32_t)buf;
 	load_img_info.endian_type     = IT8951_LDIMG_L_ENDIAN;
-	load_img_info.pixel_format =    IT8951_8BPP;
+	load_img_info.pixel_format =    IT8951_4BPP;
 	load_img_info.rotate         = IT8951_ROTATE_0;
 	load_img_info.img_buf_base_addr = epd->img_buf_addr;
 
-	//Set Load Area
-	area_img_info.x      = clip.x1;
-	area_img_info.y      = clip.y1;
-	area_img_info.width  = clip.x2 - clip.x1;
-	area_img_info.height = clip.y2 - clip.y1;
+	if (full) {
+		it8951_wait_for_display_ready(epd);
+		it8951_packed_pixel_write(epd, &load_img_info);
 
-	it8951_wait_for_display_ready(epd);
+	} else {
+		struct it8951_area_img_info area_img_info;
+		//Set Load Area
+		area_img_info.x      = clip.x1;
+		area_img_info.y      = clip.y1;
+		area_img_info.width  = clip.x2 - clip.x1;
+		area_img_info.height = clip.y2 - clip.y1;
 
-	it8951_host_area_packed_pixel_write(epd, &load_img_info, &area_img_info);
+		it8951_wait_for_display_ready(epd);
+		it8951_packed_pixel_write_area(epd, &load_img_info, &area_img_info);
+	}
+
 	it8951_display_area(epd, clip.x1, clip.y1, clip.x2 - clip.x1, clip.y2 - clip.y1, epd->update_mode);
 
 	if (epd->running)
@@ -551,6 +607,7 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 
 	epd->running = false;
 
+	epd->counter++;
 out_free:
 	kfree(buf);
 	return ret;
@@ -583,6 +640,7 @@ static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
 	it8951_write_reg(epd, I80CPCR, 0x0001);
 
 	epd->enabled = true;
+	epd->counter = 0;
 
 	it8951_standby(epd);
 	epd->running = false;
