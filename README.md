@@ -3,13 +3,14 @@ tinydrm kernel module for Waveshare it8951 based eink kits
 Tested on raspberry pi zero w with kernel 4.19, only 6" panel is supported
 
 Setup (on raspian):
-```$ cd tinydrm_it8951
+```
+$ cd tinydrm_it8951
 $ make
 ```
 
 you can test it with 
-```$ sudo sh utils/load.sh
-
+```
+$ sudo sh utils/load.sh
 ```
 
 To enable the screen at boot:
