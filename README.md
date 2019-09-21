@@ -17,7 +17,7 @@ To enable the screen at boot:
 - copy it8951.ko in your /lib/modules directory (eg /lib/modules/4.19.66+/kernel/drivers/gpu/drm/tinydrm/)
 - add modules tinydrm and it8951 in /etc/modules
 - add a line "dtoverlay=it8951" in /boot/config.txt
-- add "fbcon=map:1 vt.color=0x70" at the end of /boot/cmdline.txt
+- add "fbcon=map:1 vt.color=0xf0" at the end of /boot/cmdline.txt
 - to disable cursor blinking, add a line "echo 0 > /sys/class/graphics/fbcon/cursor_blink" in /etc/rc.local
 
 You can now reboot, the eink panel will be the screen by default
