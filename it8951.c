@@ -605,7 +605,7 @@ static int gray4_auto_wf(uint8_t *from_img, uint8_t *to_img, uint32_t w, uint32_
 
 	du_diff = wf_du_match(comp);
 
-	printk(KERN_INFO "it8951: auto waveform diff:%d du_diff:%d x1:%d,y1:%d,x2:%d,y2:%d w:%d,h:%d\n", diff, du_diff, comp->x1, comp->y1, comp->x2, comp->y2, w, h);
+	//printk(KERN_INFO "it8951: auto waveform diff:%d du_diff:%d x1:%d,y1:%d,x2:%d,y2:%d w:%d,h:%d\n", diff, du_diff, comp->x1, comp->y1, comp->x2, comp->y2, w, h);
 
 	kfree(comp->transitions);
 	comp->transitions = NULL;
@@ -703,8 +703,8 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	clip_w = clip.x2 - clip.x1;
 	clip_h = clip.y2 - clip.y1;
 
-	printk(KERN_INFO "it8951: dirty panel:%dx%d flags:%d color:%d pitch:%d clips:%d, full_screen:%d, x1:%d, y1:%d, x2:%d, y2:%d\n",
-	       epd->dev_info.panel_w, epd->dev_info.panel_h, flags, color, fb->pitches[0], num_clips, full_screen, clip.x1, clip.y1, clip.x2, clip.y2);
+	//printk(KERN_INFO "it8951: dirty panel:%dx%d flags:%d color:%d pitch:%d clips:%d, full_screen:%d, x1:%d, y1:%d, x2:%d, y2:%d\n",
+	//       epd->dev_info.panel_w, epd->dev_info.panel_h, flags, color, fb->pitches[0], num_clips, full_screen, clip.x1, clip.y1, clip.x2, clip.y2);
 
 	// create tmp buffer
 	tmp_prev_bo = drm_gem_cma_create(fb->dev, clip_w * clip_h / 2);
@@ -743,7 +743,7 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 		if (epd->update_mode == -1) {
 			struct gray4_comparator comp;
 			wf = gray4_auto_wf(tmp_prev_bo->vaddr, buf, clip_w, clip_h, &comp);
-			printk(KERN_INFO "it8951: auto waveform use %d\n", wf);
+			//printk(KERN_INFO "it8951: auto waveform use %d\n", wf);
 		} else {
 			wf = epd->update_mode;
 		}
