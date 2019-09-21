@@ -9,6 +9,7 @@ $ make
 
 you can test it with 
 ```$ sudo sh utils/load.sh
+
 ```
 
 To enable the screen at boot:
