@@ -151,6 +151,7 @@ struct it8951_epd {
 	bool running;
 
 	uint8_t *buf;
+//	struct drm_gem_cma_object *bo;
 };
 
 static void it8951_wait_for_ready(struct it8951_epd *epd)
@@ -392,7 +393,7 @@ static void it8951_packed_pixel_write(struct it8951_epd *epd, struct it8951_load
 	//Send Load Image start Cmd
 	it8951_load_img_start(epd, load_img_info);
 	//Host Write Data
-	for (j = 0; j < epd->dev_info.panel_h; j++)
+	for (j = 0; j < epd->dev_info.panel_h/2; j++) // 4bits
 	{
 		it8951_write_n_data(epd, frame_buf, epd->dev_info.panel_w);
 		frame_buf += epd->dev_info.panel_w;
@@ -413,7 +414,7 @@ static void it8951_packed_pixel_write_area(struct it8951_epd *epd, struct it8951
 	//Send Load Image start Cmd
 	it8951_load_img_area_start(epd, load_img_info, area_img_info);
 	//Host Write Data
-	for (j = 0; j < area_img_info->height; j++)
+	for (j = 0; j < area_img_info->height/2; j++) // 4bits
 	{
 		it8951_write_n_data(epd, frame_buf, area_img_info->width);
 		frame_buf += area_img_info->width;
@@ -455,6 +456,7 @@ static void it8951_xrgb8888_to_gray4(u8 *dst, void *vaddr, struct drm_framebuffe
 	unsigned int x, y;
 	void *buf;
 	u32 *src;
+	struct drm_gem_cma_object *tmp_bo;
 
 	if (WARN_ON(fb->format->format != DRM_FORMAT_XRGB8888))
 		return;
@@ -462,7 +464,9 @@ static void it8951_xrgb8888_to_gray4(u8 *dst, void *vaddr, struct drm_framebuffe
 	 * The cma memory is write-combined so reads are uncached.
 	 * Speed up by fetching one line at a time.
 	 */
-	buf = kmalloc(len, GFP_KERNEL);
+//	buf = kmalloc(len, GFP_KERNEL);
+	tmp_bo = drm_gem_cma_create(fb->dev, len);
+	buf = tmp_bo->vaddr;
 	if (!buf)
 		return;
 
@@ -472,12 +476,14 @@ static void it8951_xrgb8888_to_gray4(u8 *dst, void *vaddr, struct drm_framebuffe
 		memcpy(buf, src, len);
 		src = buf;
 		for (x = clip->x1; x < clip->x2; x += 2) {
+			// 4bits x and x+1
 			*dst++ = _it8951_rgb_to_4bits(*src) + (_it8951_rgb_to_4bits(*(src + 1)) << 4);
 			src += 2;
 		}
 	}
 
-	kfree(buf);
+//	kfree(buf);
+	drm_gem_cma_free_object((struct drm_gem_object*)tmp_bo);
 }
 #endif
 
@@ -513,73 +519,104 @@ static const struct spi_device_id it8951_id[] = {
 };
 MODULE_DEVICE_TABLE(spi, it8951_id);
 
+struct gray4_comparator {
+	uint32_t from_grays[16];
+	uint32_t to_grays[16];
 
-struct gray4_counter {
-	uint32_t grays[16];
+	uint32_t x1;
+	uint32_t y1;
+	uint32_t x2;
+	uint32_t y2;
+
+	uint32_t *transitions;
 };
 
-// count each gray in buf
-static void gray4_count(uint8_t *img, uint32_t len, struct gray4_counter *counter) {
-	int i;
-	memset(counter, 0, sizeof(struct gray4_counter));
-	for (i = 0; i < len; i++) {
-		counter->grays[img[i] >> 4]++;
-		counter->grays[img[i] & 0xf]++;
-	}
-}
-
 // compare grays in bufs
-static int gray4_compare(uint8_t *from_img, uint8_t *to_img, uint32_t len, uint32_t *transitions) {
+static int gray4_compare(uint8_t *from_img, uint8_t *to_img, uint32_t w, uint32_t h, struct gray4_comparator *comp) {
 	int diff = 0;
-	int i;
-	memset(transitions, 0, 256);
-	for (i = 0; i < len; i++) {
-		if ((from_img[i] >> 4) != (to_img[i] >> 4)) {
-			transitions[(from_img[i] >> 4) * 16 + (to_img[i] >> 4)]++;
-			diff++;
-		}
-		if ((from_img[i] & 0xf) != (to_img[i] & 0xf)) {
-			transitions[(from_img[i] & 0xf) * 16 + (to_img[i] & 0xf)]++;
-			diff++;
+	int x, y, i;
+
+	comp->x1 = w;
+	comp->y1 = h;
+	comp->x2 = 0;
+	comp->y2 = 0;
+
+	for (y = 0; y < h; y++) {
+		for (x = 0; x < w; x += 2) {
+			i = (y * w + x)/2;
+			// 4bits x
+			if ((from_img[i] >> 4) != (to_img[i] >> 4)) {
+				comp->transitions[(from_img[i] >> 4) * 16 + (to_img[i] >> 4)]++;
+				diff++;
+				if (x < comp->x1)
+					comp->x1 = x;
+				if (x > comp->x2)
+					comp->x2 = x;
+				if (y < comp->y1)
+					comp->y1 = y;
+				if (y > comp->y2)
+					comp->y2 = y;
+			}
+			comp->from_grays[from_img[i] >> 4]++;
+			comp->to_grays[to_img[i] >> 4]++;
+
+			// 4bits x+1
+			if ((from_img[i] & 0xf) != (to_img[i] & 0xf)) {
+				comp->transitions[(from_img[i] & 0xf) * 16 + (to_img[i] & 0xf)]++;
+				diff++;
+				if (x+1 < comp->x1)
+					comp->x1 = x+1;
+				if (x+1 > comp->x2)
+					comp->x2 = x+1;
+				if (y < comp->y1)
+					comp->y1 = y;
+				if (y > comp->y2)
+					comp->y2 = y;
+			}
+			comp->from_grays[from_img[i] & 0xf]++;
+			comp->to_grays[to_img[i] & 0xf]++;
+
 		}
 	}
+	comp->x2++;
+	comp->y2++;
 	return diff;
 }
 
 // diff == 0 for any to black or white
-static int wf_du_match(uint32_t *transitions) {
+static int wf_du_match(struct gray4_comparator *comp) {
 	int diff = 0;
 	int f, t;
 	for (f = 0; f < 16; f++) {
 		for (t = 1; t < 15; t++) { // except 0x0 black and 0xf white
-			diff += transitions[f * 16 + t];
+			diff += comp->transitions[f * 16 + t];
 		}
 	}
 	return diff;
 }
 
-static int gray4_auto_wf(uint8_t *from_img, uint8_t *to_img, uint32_t len) {
-	int diff, du_diff;
-	struct gray4_counter from_gray_counter;
-	struct gray4_counter to_gray_counter;
-	uint32_t *transitions;
+static int gray4_auto_wf(uint8_t *from_img, uint8_t *to_img, uint32_t w, uint32_t h, struct gray4_comparator *comp) {
+	int diff, du_diff, len;
 
-	transitions = kmalloc(256 * sizeof(uint32_t), GFP_KERNEL);
+	memset(comp, 0, sizeof(struct gray4_comparator));
+	comp->transitions = kzalloc(256 * sizeof(uint32_t), GFP_KERNEL);
 
-	diff = gray4_compare(from_img, to_img, len / 2, transitions);
-	//printk(KERN_INFO "it8951: auto waveform diff %d/%d\n", diff, len);
+	diff = gray4_compare(from_img, to_img, w, h, comp);
 
-	du_diff = wf_du_match(transitions);
-	gray4_count(from_img, len / 2, &from_gray_counter);
-	gray4_count(to_img, len / 2, &to_gray_counter);
+	du_diff = wf_du_match(comp);
 
-	kfree(transitions);
+	//printk(KERN_INFO "it8951: auto waveform diff:%d du_diff:%d x1:%d,y1:%d,x2:%d,y2:%d w:%d,h:%d\n", diff, du_diff, comp->x1,comp->y1,comp->x2,comp->y2,w,h);
+
+	kfree(comp->transitions);
+	comp->transitions = NULL;
+
+	len = w*h/2;
 
 	if (diff > 0) {
 		if (du_diff == 0 ) {
 			return IT8951_MODE_DU;
 		} else {
-			if (from_gray_counter.grays[0xf] > len / 2 && to_gray_counter.grays[0xf] > len / 2) // GL16 for > 50% white pixel
+			if (comp->from_grays[0xf] > len / 2 && comp->to_grays[0xf] > len / 2) // GL16 for > 50% white pixel
 			{
 //			if (diff < len / 32) {
 //				return IT8951_MODE_GLD16;
@@ -608,13 +645,18 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	struct it8951_epd *epd = epd_from_tinydrm(tdev);
 	struct drm_clip_rect clip;
 	int clip_w, clip_h, ret, wf, y;
-	u8 *buf = NULL, *prev_buf = NULL;
+	u8 *epd_buf = NULL, *buf = NULL, *prev_buf = NULL;
 	bool full_screen, full_refresh;
+	struct drm_gem_cma_object *tmp_bo, *tmp_prev_bo;
 
 	struct it8951_load_img_info load_img_info;
 
-	if (!epd->enabled)
+	if (!epd->enabled) {
+		printk(KERN_INFO "it8951: not enabled yet\n");
 		return 0;
+	}
+
+	epd_buf = epd->buf;//bo->vaddr;
 
 	// full refresh for ghosting
 	if (epd->update_mode == -1 && epd->last_full_refresh == 24) {
@@ -649,7 +691,10 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	//printk(KERN_INFO "it8951: dirty panel:%dx%d flags:%d color:%d clips:%d, full_screen:%d, x1:%d, y1:%d, x2:%d, y2:%d\n",
 	//       epd->dev_info.panel_w, epd->dev_info.panel_h, flags, color, num_clips, full_screen, clip.x1, clip.y1, clip.x2, clip.y2);
 
-	buf = kmalloc(clip_w * clip_h / 2, GFP_KERNEL);
+//	buf = kmalloc(clip_w * clip_h / 2, GFP_KERNEL);
+	tmp_bo = drm_gem_cma_create(fb->dev, clip_w * clip_h / 2);
+	buf = tmp_bo->vaddr;
+
 	if (!buf)
 		return -ENOMEM;
 
@@ -669,22 +714,26 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 			goto out_free;
 	}
 
-	prev_buf = kmalloc(clip_w * clip_h / 2, GFP_KERNEL);
+	//prev_buf = kmalloc(clip_w * clip_h / 2, GFP_KERNEL);
+	tmp_prev_bo = drm_gem_cma_create(fb->dev, clip_w * clip_h / 2);
+	prev_buf = tmp_prev_bo->vaddr;
+
 	if (!prev_buf)
 		return -ENOMEM;
 
 	if (clip_w == epd->dev_info.panel_w) { // optimize if same pitch
-		memcpy(prev_buf, epd->buf + (clip.y1 * clip_w + clip.x1) / 2, clip_w * clip_h / 2);
+		memcpy(prev_buf, epd_buf + (clip.y1 * clip_w + clip.x1) / 2, clip_w * clip_h / 2);
 	} else {
 		for (y = 0; y < clip_h; y++)
-			memcpy(prev_buf + (y * clip_w + clip.x1) / 2, epd->buf + ((y + clip.y1)*epd->dev_info.panel_w + clip.x1) / 2, clip_w / 2);
+			memcpy(prev_buf + (y * clip_w + clip.x1) / 2, epd_buf + ((y + clip.y1)*epd->dev_info.panel_w + clip.x1) / 2, clip_w / 2);
 	}
 
 	if (full_refresh) {
 		wf = IT8951_MODE_GC16;
 	} else {
 		if (epd->update_mode == -1) {
-			wf = gray4_auto_wf(prev_buf, buf, clip_w * clip_h);
+			struct gray4_comparator comp;
+			wf = gray4_auto_wf(prev_buf, buf, clip_w, clip_h, &comp);
 			//printk(KERN_INFO "it8951: auto waveform use %d\n", wf);
 		} else {
 			wf = epd->update_mode;
@@ -692,10 +741,10 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	}
 
 	if (clip_w == epd->dev_info.panel_w) { // optimize if same pitch
-		memcpy(epd->buf + (clip.y1 * clip_w + clip.x1) / 2, buf, clip_w * clip_h / 2);
+		memcpy(epd_buf + (clip.y1 * clip_w + clip.x1) / 2, buf, clip_w * clip_h / 2);
 	} else {
 		for (y = 0; y < clip_h; y++)
-			memcpy(epd->buf + ((y + clip.y1)*epd->dev_info.panel_w + clip.x1) / 2, buf + (y * clip_w + clip.x1) / 2, clip_w / 2);
+			memcpy(epd_buf + ((y + clip.y1)*epd->dev_info.panel_w + clip.x1) / 2, buf + (y * clip_w + clip.x1) / 2, clip_w / 2);
 	}
 
 	load_img_info.start_fb_addr    = (uint32_t)buf;
@@ -741,8 +790,13 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	}
 
 out_free:
-	kfree(buf);
-	kfree(prev_buf);
+//	kfree(buf);
+//	kfree(prev_buf);
+	if(buf)
+		drm_gem_cma_free_object((struct drm_gem_object*)tmp_bo);
+	if(prev_buf)
+		drm_gem_cma_free_object((struct drm_gem_object*)tmp_prev_bo);
+
 	return ret;
 }
 
@@ -758,6 +812,7 @@ static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
 {
 	struct tinydrm_device *tdev = pipe_to_tinydrm(pipe);
 	struct it8951_epd *epd = epd_from_tinydrm(tdev);
+	//struct drm_framebuffer *fb = pipe->plane.fb;
 
 	printk(KERN_INFO "it8951: pipe enable\n");
 
@@ -776,7 +831,9 @@ static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
 	epd->last_full_refresh = 0;
 
 	epd->buf = kmalloc(epd->dev_info.panel_w * epd->dev_info.panel_h / 2, GFP_KERNEL);
-	memset(epd->buf, 0xf, epd->dev_info.panel_w * epd->dev_info.panel_h / 2);
+	memset(epd->buf, 0xf, epd->dev_info.panel_w * epd->dev_info.panel_h / 2); // set pixels to white
+//	epd->bo = drm_gem_cma_create(fb->dev, epd->dev_info.panel_w * epd->dev_info.panel_h / 2);
+//	memset(epd->bo->vaddr, 0xf, epd->dev_info.panel_w * epd->dev_info.panel_h / 2); // set pixels to white
 
 	it8951_standby(epd);
 	epd->running = false;
@@ -788,12 +845,13 @@ static void it8951_pipe_disable(struct drm_simple_display_pipe *pipe)
 	struct it8951_epd *epd = epd_from_tinydrm(tdev);
 
 	printk(KERN_INFO "it8951: pipe disable\n");
-	
+
 	mutex_lock(&tdev->dirty_lock);
 	epd->enabled = false;
 	mutex_unlock(&tdev->dirty_lock);
 
 	kfree(epd->buf);
+//	drm_gem_cma_free_object((struct drm_gem_object*)epd->bo);
 }
 
 static const struct drm_simple_display_pipe_funcs it8951_pipe_funcs = {
