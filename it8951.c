@@ -455,7 +455,7 @@ static inline uint8_t _it8951_rgb_to_4bits(uint32_t rgb) {
 	return ((3 * r + 6 * g + b) / 10) >> 4;
 }
 
-static inline void it8951_memcpy_gray4(uint8_t *dst, uint8_t *src, int src_width, struct drm_clip_rect *clip) {
+static void it8951_memcpy_gray4(uint8_t *dst, uint8_t *src, int src_width, struct drm_clip_rect *clip) {
 	int clip_w, clip_h, y;
 	clip_w = clip->x2 - clip->x1;
 	clip_h = clip->y2 - clip->y1;
@@ -464,7 +464,7 @@ static inline void it8951_memcpy_gray4(uint8_t *dst, uint8_t *src, int src_width
 		memcpy(dst, src + (clip->y1 * clip_w + clip->x1) / 2, clip_w * clip_h / 2);
 	} else {
 		for (y = 0; y < clip_h; y++)
-			memcpy(dst + (y * clip_w + clip->x1) / 2, src + ((y + clip->y1)*src_width + clip->x1) / 2, clip_w / 2);
+			memcpy(dst + (y * clip_w) / 2, src + ((y + clip->y1)*src_width + clip->x1) / 2, clip_w / 2);
 	}
 }
 
