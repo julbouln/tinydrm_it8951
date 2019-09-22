@@ -1,3 +1,12 @@
+/*
+ * Copyright 2019 Julien Boulnois
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ */
+
 #include <linux/delay.h>
 #include <linux/dma-buf.h>
 #include <linux/gpio/consumer.h>
@@ -58,6 +67,7 @@
 #define IT8951_MODE_GL16  3
 #define IT8951_MODE_GLR16 4
 #define IT8951_MODE_GLD16 5
+// the following mode does not seems to work ...
 #define IT8951_MODE_A2    6
 #define IT8951_MODE_DU4   7
 
@@ -101,6 +111,8 @@
 #define MCSR_BASE_ADDR 0x0200
 #define MCSR (MCSR_BASE_ADDR + 0x0000)
 #define LISAR (MCSR_BASE_ADDR + 0x0008)
+
+//#define IT8951_DEBUG
 
 struct it8951_load_img_info
 {
@@ -154,10 +166,13 @@ struct it8951_epd {
 	struct drm_gem_cma_object *bo;
 };
 
-static void it8951_wait_for_ready(struct it8951_epd *epd)
+static void it8951_wait_for_ready(struct it8951_epd *epd, int us)
 {
+	int waited = 0;
 	while (!gpiod_get_value_cansleep(epd->hrdy)) {
-		usleep_range(1, 10);
+//		printk(KERN_INFO "it8951: wait_for_ready %d\n",waited);
+		usleep_range(us, us * 2);
+		waited += us;
 	}
 }
 
@@ -187,8 +202,12 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 	int speed_hz = 12000000; // can't get it works at > 12Mhz
 	int ret;
 	u8 *txbuf = NULL, *rxbuf = NULL;
-
 	uint16_t spreamble = it8951_swab16(epd, preamble);
+
+	//if(tx)
+	//	printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d tx:%x\n",preamble, len, ((uint16_t *)tx)[0]);
+	//else
+	//	printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d\n",preamble, len);
 
 	if (tx) {
 		txbuf = kmalloc(len, GFP_KERNEL);
@@ -207,7 +226,7 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 		}
 	}
 
-	it8951_wait_for_ready(epd);
+	it8951_wait_for_ready(epd, 100);
 
 	if (dummy) {
 		uint16_t dummy = 0;
@@ -377,7 +396,8 @@ static void it8951_wait_for_display_ready(struct it8951_epd *epd)
 {
 	//Check IT8951 Register LUTAFSR => NonZero Busy, 0 - Free
 	while (it8951_read_reg(epd, LUTAFSR)) {
-		usleep_range(1, 10);
+		//printk(KERN_INFO "it8951: wait_for_display_ready\n");
+		usleep_range(1000, 2000);
 	}
 
 }
@@ -403,7 +423,7 @@ static void it8951_packed_pixel_write(struct it8951_epd *epd, struct it8951_load
 	it8951_load_img_end(epd);
 }
 
-#define MAX_SPI_TRANSFER 16384
+#define MAX_SPI_TRANSFER 32768
 
 static void it8951_packed_pixel_write_area(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info, struct it8951_area_img_info* area_img_info)
 {
@@ -443,7 +463,11 @@ static void it8951_display_area(struct it8951_epd *epd, uint16_t x, uint16_t y, 
 	it8951_write_data(epd, w);
 	it8951_write_data(epd, h);
 	it8951_write_data(epd, dpy_mode);
+
+
+	it8951_wait_for_ready(epd, w * h / 8); // wait longer for data
 }
+
 
 
 static inline uint8_t _it8951_rgb_to_4bits(uint32_t rgb) {
@@ -605,24 +629,25 @@ static int gray4_auto_wf(uint8_t *from_img, uint8_t *to_img, uint32_t w, uint32_
 
 	du_diff = wf_du_match(comp);
 
-	//printk(KERN_INFO "it8951: auto waveform diff:%d du_diff:%d x1:%d,y1:%d,x2:%d,y2:%d w:%d,h:%d\n", diff, du_diff, comp->x1, comp->y1, comp->x2, comp->y2, w, h);
-
 	kfree(comp->transitions);
 	comp->transitions = NULL;
 
 	len = w * h / 2;
 
+#ifdef IT8951_DEBUG
+	printk(KERN_INFO "it8951: auto waveform len:%d diff:%d du_diff:%d x1:%d,y1:%d,x2:%d,y2:%d w:%d,h:%d\n", len, diff, du_diff, comp->x1, comp->y1, comp->x2, comp->y2, w, h);
+#endif
 	if (diff > 0) {
-		if (du_diff == 0 ) {
+		if (du_diff == 0 ) { // DU for any gray to black or white
 			return IT8951_MODE_DU;
 		} else {
 			if (comp->from_grays[0xf] > len / 2 && comp->to_grays[0xf] > len / 2) // GL16 for > 50% white pixel
 			{
-//			if (diff < len / 32) {
-//				return IT8951_MODE_GLD16;
-//			} else {
-				return IT8951_MODE_GL16;
-//			}
+				if (diff < len / 16) { // reduced flashing GLD16 for < 6% diff
+					return IT8951_MODE_GLD16;
+				} else {
+					return IT8951_MODE_GL16;
+				}
 			} else {
 				return IT8951_MODE_GC16;
 			}
@@ -667,7 +692,7 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 	}
 
 	// full refresh for ghosting
-	if (epd->update_mode == -1 && epd->last_full_refresh == 24) {
+	if (epd->update_mode == -1 && epd->last_full_refresh == 32) {
 		clip.x1 = 0;
 		clip.x2 = epd->dev_info.panel_w;
 		clip.y1 = 0;
@@ -693,24 +718,27 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 		if (clip.y2 % CLIP_PADDING != 0)
 			clip.y2 += CLIP_PADDING - (clip.y2 % CLIP_PADDING);
 
-		if(clip.x2 > epd->dev_info.panel_w)
+		if (clip.x2 > epd->dev_info.panel_w)
 			clip.x2 = epd->dev_info.panel_w;
 
-		if(clip.y2 > epd->dev_info.panel_h)
+		if (clip.y2 > epd->dev_info.panel_h)
 			clip.y2 = epd->dev_info.panel_h;
 	}
 
 	clip_w = clip.x2 - clip.x1;
 	clip_h = clip.y2 - clip.y1;
 
-	//printk(KERN_INFO "it8951: dirty panel:%dx%d flags:%d color:%d pitch:%d clips:%d, full_screen:%d, x1:%d, y1:%d, x2:%d, y2:%d\n",
-	//       epd->dev_info.panel_w, epd->dev_info.panel_h, flags, color, fb->pitches[0], num_clips, full_screen, clip.x1, clip.y1, clip.x2, clip.y2);
+#ifdef IT8951_DEBUG
+	printk(KERN_INFO "it8951: dirty panel:%dx%d flags:%d color:%d pitch:%d clips:%d, full_screen:%d, x1:%d, y1:%d, x2:%d, y2:%d\n",
+	       epd->dev_info.panel_w, epd->dev_info.panel_h, flags, color, fb->pitches[0], num_clips, full_screen, clip.x1, clip.y1, clip.x2, clip.y2);
+#endif
 
 	// create tmp buffer
 	tmp_prev_bo = drm_gem_cma_create(fb->dev, clip_w * clip_h / 2);
 
 	// copy previous buffer
-	it8951_memcpy_gray4(tmp_prev_bo->vaddr, epd->buf, epd->dev_info.panel_w, &clip);
+	if (!full_refresh && epd->update_mode == -1)
+		it8951_memcpy_gray4(tmp_prev_bo->vaddr, epd->buf, epd->dev_info.panel_w, &clip);
 
 	if (import_attach) {
 		ret = dma_buf_begin_cpu_access(import_attach->dmabuf,
@@ -728,7 +756,7 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 			goto out_free;
 	}
 
-	if (full_screen) {
+	if (full_screen || full_refresh) {
 		buf = epd->buf;
 	} else {
 		// create tmp buffer
@@ -743,7 +771,9 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 		if (epd->update_mode == -1) {
 			struct gray4_comparator comp;
 			wf = gray4_auto_wf(tmp_prev_bo->vaddr, buf, clip_w, clip_h, &comp);
-			//printk(KERN_INFO "it8951: auto waveform use %d\n", wf);
+#ifdef IT8951_DEBUG
+			printk(KERN_INFO "it8951: auto waveform use %d\n", wf);
+#endif
 		} else {
 			wf = epd->update_mode;
 		}
