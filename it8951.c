@@ -16,6 +16,7 @@
 #include <linux/spi/spi.h>
 #include <linux/pm.h>
 
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/tinydrm/tinydrm.h>
 #include <drm/tinydrm/tinydrm-helpers.h>
@@ -399,7 +400,6 @@ static void it8951_wait_for_display_ready(struct it8951_epd *epd)
 		//printk(KERN_INFO "it8951: wait_for_display_ready\n");
 		usleep_range(1000, 2000);
 	}
-
 }
 
 static void it8951_packed_pixel_write(struct it8951_epd *epd, struct it8951_load_img_info* load_img_info)
@@ -468,8 +468,6 @@ static void it8951_display_area(struct it8951_epd *epd, uint16_t x, uint16_t y, 
 	it8951_wait_for_ready(epd, w * h / 8); // wait longer for data
 }
 
-
-
 static inline uint8_t _it8951_rgb_to_4bits(uint32_t rgb) {
 	u8 r = (rgb & 0x00ff0000) >> 16;
 	u8 g = (rgb & 0x0000ff00) >> 8;
@@ -511,38 +509,7 @@ static void it8951_xrgb8888_to_gray4(uint8_t *dst_vaddr, void *src_vaddr, struct
 	}
 }
 
-static inline struct it8951_epd *
-epd_from_tinydrm(struct tinydrm_device *tdev)
-{
-	return container_of(tdev, struct it8951_epd, tinydrm);
-}
-
-DEFINE_DRM_GEM_CMA_FOPS(it8951_fops);
-
-static struct drm_driver it8951_driver = {
-	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_PRIME |
-	DRIVER_ATOMIC,
-	.fops			= &it8951_fops,
-	TINYDRM_GEM_DRIVER_OPS,
-	.name			= "it8951",
-	.desc			= "it8951 e-ink",
-	.date			= "20190913",
-	.major			= 1,
-	.minor			= 0,
-};
-
-static const struct of_device_id it8951_of_match[] = {
-	{ .compatible = "ite,it8951" },
-	{},
-};
-MODULE_DEVICE_TABLE(of, it8951_of_match);
-
-static const struct spi_device_id it8951_id[] = {
-	{ "it8951", 0 },
-	{ },
-};
-MODULE_DEVICE_TABLE(spi, it8951_id);
-
+/* Auto waveform */
 struct gray4_comparator {
 	uint32_t from_grays[16];
 	uint32_t to_grays[16];
@@ -643,7 +610,7 @@ static int gray4_auto_wf(uint8_t *from_img, uint8_t *to_img, uint32_t w, uint32_
 		} else {
 			if (comp->from_grays[0xf] > len / 2 && comp->to_grays[0xf] > len / 2) // GL16 for > 50% white pixel
 			{
-				if (diff < len / 16) { // reduced flashing GLD16 for < 6% diff
+				if (diff < len / 32) { // reduced flashing GLD16 for < 3% diff
 					return IT8951_MODE_GLD16;
 				} else {
 					return IT8951_MODE_GL16;
@@ -656,6 +623,46 @@ static int gray4_auto_wf(uint8_t *from_img, uint8_t *to_img, uint32_t w, uint32_
 		return -1;
 	}
 }
+
+
+/* Linux driver part */
+
+static struct fb_deferred_io it8951_defio = {
+	.delay = HZ / 4, // 4 fps at best
+	.deferred_io = drm_fb_helper_deferred_io,
+};
+
+static inline struct it8951_epd *
+epd_from_tinydrm(struct tinydrm_device *tdev)
+{
+	return container_of(tdev, struct it8951_epd, tinydrm);
+}
+
+DEFINE_DRM_GEM_CMA_FOPS(it8951_fops);
+
+static struct drm_driver it8951_driver = {
+	.driver_features	= DRIVER_GEM | DRIVER_MODESET | DRIVER_PRIME |
+	DRIVER_ATOMIC,
+	.fops			= &it8951_fops,
+	TINYDRM_GEM_DRIVER_OPS,
+	.name			= "it8951",
+	.desc			= "it8951 e-ink",
+	.date			= "20190913",
+	.major			= 1,
+	.minor			= 0,
+};
+
+static const struct of_device_id it8951_of_match[] = {
+	{ .compatible = "ite,it8951" },
+	{},
+};
+MODULE_DEVICE_TABLE(of, it8951_of_match);
+
+static const struct spi_device_id it8951_id[] = {
+	{ "it8951", 0 },
+	{ },
+};
+MODULE_DEVICE_TABLE(spi, it8951_id);
 
 #define CLIP_PADDING 4
 
@@ -927,6 +934,8 @@ static int it8951_probe(struct spi_device *spi)
 	struct device *dev = &spi->dev;
 	struct tinydrm_device *tdev;
 	struct it8951_epd *epd;
+	struct fb_info *info;
+
 	int ret;
 
 	match = of_match_device(it8951_of_match, dev);
@@ -992,6 +1001,11 @@ static int it8951_probe(struct spi_device *spi)
 	ret = devm_tinydrm_register(tdev);
 	if (ret)
 		return ret;
+
+	// set deferedio
+	info = tdev->drm->fb_helper->fbdev;
+	info->fbdefio = &it8951_defio;
+	fb_deferred_io_init(info);
 
 	ret = device_create_file(&spi->dev, &it8951_update_mode_attr);
 	if (ret) {
