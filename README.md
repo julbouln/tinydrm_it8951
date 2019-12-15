@@ -14,11 +14,19 @@ $ sudo sh utils/load.sh
 ```
 
 To enable the screen at boot:
+
+Raspberry Pi
 - copy it8951.ko in your /lib/modules directory (eg /lib/modules/4.19.66+/kernel/drivers/gpu/drm/tinydrm/)
-- generate overlay : dtc -I dts -O dtb -o boot/overlays/it8951.dtb rpi-overlays/it8951-overlay.dts
+- generate overlay : sudo make rpi_overlay
 - add modules tinydrm and it8951 in /etc/modules
 - add a line "dtoverlay=it8951" in /boot/config.txt
 - add "fbcon=map:1 vt.color=0xf0" at the end of /boot/cmdline.txt
 - to disable cursor blinking, add a line "echo 0 > /sys/class/graphics/fbcon/cursor_blink" in /etc/rc.local
+
+Beaglebone
+   - generate overlay: sudo make bb_spi0_overlay
+   - sudo cp IT8951-00A0.dtbo /lib/firmware/
+   - edit /boot/uEnv.txt to add dtb : dtb_overlay=/lib/firmware/IT8951-00A0.dtbo
+    - add "vt.color=0xf0" at the end of cmdline= in /boot/uEnv.txt
 
 You can now reboot, the eink panel will be the screen by default

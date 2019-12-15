@@ -170,11 +170,13 @@ struct it8951_epd {
 static void it8951_wait_for_ready(struct it8951_epd *epd, int us)
 {
 	int waited = 0;
-	while (!gpiod_get_value_cansleep(epd->hrdy)) {
-//		printk(KERN_INFO "it8951: wait_for_ready %d\n",waited);
+	while (!gpiod_get_value_cansleep(epd->hrdy) && waited < 1000000) {
 		usleep_range(us, us * 2);
 		waited += us;
 	}
+#ifdef IT8951_DEBUG
+		printk(KERN_INFO "it8951: wait_for_ready %d\n",waited);
+#endif
 }
 
 /* SPI data transfer */
@@ -205,10 +207,12 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 	u8 *txbuf = NULL, *rxbuf = NULL;
 	uint16_t spreamble = it8951_swab16(epd, preamble);
 
-	//if(tx)
-	//	printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d tx:%x\n",preamble, len, ((uint16_t *)tx)[0]);
-	//else
-	//	printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d\n",preamble, len);
+#ifdef IT8951_DEBUG
+	if(tx)
+		printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d tx:%x\n",preamble, len, ((uint16_t *)tx)[0]);
+	else
+		printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d\n",preamble, len);
+#endif
 
 	if (tx) {
 		txbuf = kmalloc(len, GFP_KERNEL);
@@ -264,6 +268,13 @@ static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool d
 
 	if (rx && !ret) {
 		it8951_memcpy_swab16(epd, (uint16_t *)rx, (uint16_t *)rxbuf, len / 2);
+
+#ifdef IT8951_DEBUG
+//		int i;
+//		for(i=0;i<len;i+=4) {
+//			printk(KERN_INFO "it8951: it8951_spi_transfer preamble:%x len:%d %d:%x %d:%x %d:%x %d:%x\n",preamble, len, i,rxbuf[i],i+1,rxbuf[i+1],i+2,rxbuf[i+2],i+3,rxbuf[i+3]);			
+//		}
+#endif
 	}
 
 out_free:
@@ -685,6 +696,11 @@ static int it8951_fb_dirty(struct drm_framebuffer *fb,
 
 	struct it8951_load_img_info load_img_info;
 
+	if(epd->dev_info.panel_w == 0 || epd->dev_info.panel_h == 0) {
+		//printk(KERN_INFO "it8951: initialization failed\n");
+		return 0;
+	}
+
 	if (!epd->enabled) {
 		printk(KERN_INFO "it8951: not enabled yet\n");
 		return 0;
@@ -856,6 +872,8 @@ static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
 	gpiod_set_value_cansleep(epd->reset, 0);
 	msleep(100);
 	gpiod_set_value_cansleep(epd->reset, 1);
+
+	msleep(100);
 
 	it8951_get_system_info(epd);
 
