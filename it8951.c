@@ -167,6 +167,19 @@ struct it8951_epd {
 	struct drm_gem_cma_object *bo;
 };
 
+
+static int vcom = 0;
+module_param(vcom, int, 0660);
+MODULE_PARM_DESC(vcom, "panel VCOM voltage in mV");
+
+static int spi_freq = 12000000; // can't get it works at > 12Mhz at least on RPI
+module_param(spi_freq, int, 0660);
+MODULE_PARM_DESC(spi_freq, "SPI frequency in Hz, default 12000000");
+
+static int update_mode = -1; // auto
+module_param(update_mode, int, 0660);
+MODULE_PARM_DESC(update_mode, "Waveform update mode, default -1 (auto)");
+
 static void it8951_wait_for_ready(struct it8951_epd *epd, int us)
 {
 	int waited = 0;
@@ -202,7 +215,7 @@ static inline u16 it8951_swab16(struct it8951_epd *epd, u16 data) {
 }
 
 static int it8951_spi_transfer(struct it8951_epd *epd, uint16_t preamble, bool dummy, const void *tx, void *rx, uint32_t len) {
-	int speed_hz = 12000000; // can't get it works at > 12Mhz
+	int speed_hz = spi_freq;
 	int ret;
 	u8 *txbuf = NULL, *rxbuf = NULL;
 	uint16_t spreamble = it8951_swab16(epd, preamble);
@@ -863,6 +876,7 @@ static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
                                struct drm_crtc_state *crtc_state,
                                struct drm_plane_state *plane_state)
 {
+	int cur_vcom;
 	struct tinydrm_device *tdev = pipe_to_tinydrm(pipe);
 	struct it8951_epd *epd = epd_from_tinydrm(tdev);
 	//struct drm_framebuffer *fb = pipe->plane.fb;
@@ -881,6 +895,25 @@ static void it8951_pipe_enable(struct drm_simple_display_pipe *pipe,
 
 	//Set to Enable I80 Packed mode
 	it8951_write_reg(epd, I80CPCR, 0x0001);
+
+	// Get current vcom value
+	it8951_write_cmd_code(epd, USDEF_I80_CMD_VCOM);
+	it8951_write_data(epd, 0);
+	cur_vcom = it8951_read_data(epd);
+
+	printk(KERN_INFO "it8951: VCOM -%dmV\n", cur_vcom);
+	if(vcom) {
+		if(vcom != -cur_vcom) {
+			if(vcom < -200 && vcom > -2700) {
+				printk(KERN_INFO "it8951: change VCOM to %dmV\n", vcom);
+				it8951_write_cmd_code(epd, USDEF_I80_CMD_VCOM);
+				it8951_write_data(epd, 1);
+				it8951_write_data(epd, -vcom);
+			} else {
+				printk(KERN_WARNING "it8951: invalid VCOM %d, must be between -200 and -2700\n", vcom);
+			}
+		}
+	}
 
 	epd->enabled = true;
 	epd->last_full_refresh = 0;
@@ -990,7 +1023,7 @@ static int it8951_probe(struct spi_device *spi)
 	}
 
 	epd->little_endian = tinydrm_machine_little_endian();
-	epd->update_mode = -1; // auto
+	epd->update_mode = update_mode;
 
 	tdev = &epd->tinydrm;
 
