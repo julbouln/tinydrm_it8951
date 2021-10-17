@@ -28,7 +28,6 @@ sudo sh utils/load.sh
 ### Beaglebone
 
 - generate overlay: sudo make bb_spi0_overlay
-- sudo cp IT8951-00A0.dtbo /lib/firmware/
 - edit /boot/uEnv.txt to add dtb : dtb_overlay=/lib/firmware/BB-IT8951-SPI0-00A0.dtbo
 - add "vt.color=0xf0" at the end of cmdline= in /boot/uEnv.txt
 
@@ -61,8 +60,14 @@ Where update_mode can be one of:
 #define IT8951_MODE_GLD16 5
 ```
 
-You can also change the waveform at any moment with a /sys entry (eg on BBB):
+You can change the waveform at any moment with a /sys entry (eg on BBB):
 ```bash
 cat /sys/devices/platform/ocp/48030000.spi/spi_master/spi0/spi0.0/update_mode
 echo 2 > /sys/devices/platform/ocp/48030000.spi/spi_master/spi0/spi0.0/update_mode
+```
+
+You can also set the refresh rate for ghosting (number of refresh before full refresh):
+```bash
+cat /sys/devices/platform/ocp/48030000.spi/spi_master/spi0/spi0.0/ghosting_refresh
+echo 50 > /sys/devices/platform/ocp/48030000.spi/spi_master/spi0/spi0.0/ghosting_refresh
 ```

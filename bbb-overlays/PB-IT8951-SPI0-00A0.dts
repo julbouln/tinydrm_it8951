@@ -1,0 +1,99 @@
+/*
+ * Copyright (C) 2013 CircuitCo
+ * Copyright (C) 2018 Drew Fustini <drew@beagleboard.org>
+ * Copyright (C) 2019 Mark A. Yoder <mark.a.yoder@beagleboard.org>
+ *
+ * Waveshare Eink display on SPI0 bus using tinydrm it8951 driver
+ *
+ * LICENSE:
+ * --------
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * DOCUMENTATION:
+ * --------------
+ *
+ *   P1.02 <--> reset
+ *   P1.04 <--> hrdy
+ *   P1.06 <--> cs
+ *   P1.08 <--> clk
+ *   P1.10 <--> miso
+ *   P1.12 <--> mosi
+ *
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/am33xx.h>
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	/*
+	 * Helper to show loaded overlays under: /proc/device-tree/chosen/overlays/
+	 */
+	fragment@0 {
+		target-path="/";
+		__overlay__ {
+
+			chosen {
+				overlays {
+					IT8951-SPI0-00A0 = __TIMESTAMP__;
+				};
+			};
+		};
+	};
+
+	/*
+	 * Free up the pins used by the cape from the pinmux helpers.
+	 */
+
+	fragment@1 {
+		target = <&ocp>;
+		__overlay__ {
+			P1_02_pinmux { status = "disabled"; };	/* reset */
+			P1_04_pinmux { status = "disabled"; };	/* hrdy */
+			P1_06_pinmux { status = "disabled"; };	/* spi0_cs0 */
+			P1_08_pinmux { status = "disabled"; };	/* spi0_sclk */
+			P1_10_pinmux { status = "disabled"; };	/* spi0_d0 */
+			P1_12_pinmux { status = "disabled"; };	/* spi0_d1 */
+		};
+	};
+
+	fragment@2 {
+		target = <&am33xx_pinmux>;
+		__overlay__ {
+			pb_spi0_pins: pinmux_pb_spi0_pins {
+				pinctrl-single,pins = <
+				AM33XX_PADCONF(AM335X_PIN_SPI0_SCLK, PIN_INPUT_PULLUP, MUX_MODE0)	/* (A17) spi0_sclk.spi0_sclk */
+				AM33XX_PADCONF(AM335X_PIN_SPI0_D0, PIN_INPUT_PULLUP, MUX_MODE0)	/* (B17) spi0_d0.spi0_d0 */
+				AM33XX_PADCONF(AM335X_PIN_SPI0_D1, PIN_INPUT_PULLUP, MUX_MODE0)	/* (B16) spi0_d1.spi0_d1 */
+				AM33XX_PADCONF(AM335X_PIN_SPI0_CS0, PIN_INPUT_PULLUP, MUX_MODE0)	/* (A16) spi0_cs0.spi0_cs0 */
+				>;
+			};
+
+		};
+	};
+
+	fragment@3 {
+		target = <&spi0>;
+		__overlay__ {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			status = "okay";
+			pinctrl-names = "default";
+			pinctrl-0 = <&pb_spi0_pins>;
+
+			display@0{
+				status = "okay";
+				compatible = "ite,it8951";
+				reg = <0>;
+				spi-max-frequency = <32000000>;
+				hrdy-gpios    = <&gpio2 25 0>;   // hrdy    P1.04 gpio2[25]
+				reset-gpios = <&gpio2 23 0>;   // reset P1.02 gpio2[23]
+			};
+		};
+	};
+};
