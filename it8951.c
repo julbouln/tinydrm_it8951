@@ -21,7 +21,8 @@
 #include <drm/tinydrm/tinydrm.h>
 #include <drm/tinydrm/tinydrm-helpers.h>
 
-//#define WIP_FIX_REFRESH
+// #define WIP_FIX_REFRESH
+// #define IT8951_DEBUG
 
 //Built in I80 Command Code
 #define IT8951_TCON_SYS_RUN 0x0001
@@ -114,8 +115,6 @@
 #define MCSR_BASE_ADDR 0x0200
 #define MCSR (MCSR_BASE_ADDR + 0x0000)
 #define LISAR (MCSR_BASE_ADDR + 0x0008)
-
-#define IT8951_DEBUG
 
 struct it8951_load_img_info
 {
