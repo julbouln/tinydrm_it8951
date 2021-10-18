@@ -97,6 +97,10 @@
 				spi-max-frequency = <32000000>;
 				hrdy-gpios    = <&gpio1 16 0>;   // hrdy    P9.15 gpio1[16]
 				reset-gpios = <&gpio1 28 0>;   // reset P9.12 gpio1[28]
+				
+				rotation = <0>;
+				xres = <800>;
+				yres = <600>;
 			};
 		};
 	};

@@ -52,6 +52,10 @@
 				rotation = <0>;
 				reset-gpios = <&gpio 17 0>;
 				hrdy-gpios = <&gpio 24 0>;
+
+				rotation = <0>;
+				xres = <800>;
+				yres = <600>;
 			};
 		};
 	};
